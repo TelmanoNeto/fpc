@@ -1,0 +1,264 @@
+// =====================================================================
+// Lab10 - Concorrência em Go com Goroutines e Canais
+// =====================================================================
+// Este arquivo contém as 6 soluções pedidas no roteiro (main1.go a
+// main6.go). Como cada uma precisa ser um arquivo Go independente
+// (cada uma tem sua própria função main), copie cada bloco delimitado
+// pelos marcadores "===== mainX.go =====" para um arquivo separado
+// com esse nome, dentro da pasta do laboratório.
+//
+// Para rodar cada um:
+//   go run main1.go
+//   go run main2.go
+//   ... etc.
+// =====================================================================
+
+
+// ===================== main1.go =====================
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("Olá Go!")
+}
+
+
+// ===================== main2.go =====================
+// Junta as 4 etapas do roteiro (sequencial -> goroutine -> com Sleep)
+// na versão final pedida: chamada como goroutine + time.Sleep para
+// dar tempo dela terminar antes do fim da main.
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+func mensagem() {
+	fmt.Println("Executando mensagem")
+}
+
+func main() {
+	go mensagem()
+	time.Sleep(time.Second)
+	fmt.Println("Fim da main")
+}
+
+
+// ===================== main3.go =====================
+// Introdução aos canais: worker envia uma mensagem, main recebe.
+// Also demonstra canal unidirecional, canal bufferizado e envio de
+// vários valores, conforme pedido ao longo da seção.
+package main
+
+import "fmt"
+
+// worker só pode enviar no canal (canal unidirecional de envio)
+func worker(c chan<- string) {
+	c <- "Olá da goroutine"
+}
+
+// produtor envia 5 números em sequência pelo canal
+func produtor(c chan<- int) {
+	for i := 1; i <= 5; i++ {
+		c <- i
+	}
+}
+
+func main() {
+	// Canal não bufferizado: quem envia espera quem recebe, e vice-versa
+	canal := make(chan string)
+	go worker(canal)
+	mensagem := <-canal
+	fmt.Println(mensagem)
+
+	// Canal bufferizado: permite até 3 valores sem bloquear o envio
+	bufferizado := make(chan int, 3)
+	bufferizado <- 10
+	bufferizado <- 20
+	bufferizado <- 30
+	fmt.Println(<-bufferizado, <-bufferizado, <-bufferizado)
+
+	// Enviando vários valores por um canal unidirecional
+	numeros := make(chan int)
+	go produtor(numeros)
+	for i := 1; i <= 5; i++ {
+		fmt.Println(<-numeros)
+	}
+}
+
+
+// ===================== main4.go =====================
+// Dois produtores compartilhando o mesmo canal, e uso de close +
+// range para consumir até o canal ser esvaziado e fechado.
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+func produtor(nome string, c chan<- string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for i := 1; i <= 5; i++ {
+		c <- fmt.Sprintf("%s -> %d", nome, i)
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func main() {
+	canal := make(chan string)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go produtor("A", canal, &wg)
+	go produtor("B", canal, &wg)
+
+	// goroutine auxiliar fecha o canal quando os dois produtores terminarem,
+	// permitindo usar range com segurança na main
+	go func() {
+		wg.Wait()
+		close(canal)
+	}()
+
+	for valor := range canal {
+		fmt.Println(valor)
+	}
+}
+
+
+// ===================== main5.go =====================
+// Pipeline concorrente: Gerador -> Quadrado -> Impressão
+package main
+
+import "fmt"
+
+func geraNumeros(c chan int) {
+	for i := 1; i <= 5; i++ {
+		c <- i
+	}
+	close(c)
+}
+
+func quadrado(entrada chan int, saida chan int) {
+	for n := range entrada {
+		saida <- n * n
+	}
+	close(saida)
+}
+
+func main() {
+	entrada := make(chan int)
+	saida := make(chan int)
+
+	go geraNumeros(entrada)
+	go quadrado(entrada, saida)
+
+	for resultado := range saida {
+		fmt.Println(resultado)
+	}
+}
+
+
+// ===================== main6.go =====================
+// Exercício do lab: sistema de monitoramento com dois sensores de
+// temperatura (produtores) enviando para um canal compartilhado, e um
+// consumidor que calcula quantidade de medições, média, maior e menor
+// temperatura.
+package main
+
+import (
+	"fmt"
+	"math/rand"
+	"sync"
+	"time"
+)
+
+// sensor gera 100 temperaturas aleatórias entre 0 e 60, aguarda um
+// intervalo entre as medições e envia cada leitura ao canal
+// compartilhado. c é um canal somente de envio (unidirecional).
+func sensor(nome string, c chan<- float64, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for i := 0; i < 100; i++ {
+		temperatura := rand.Float64() * 60 // 0.0 a 60.0
+		c <- temperatura
+		time.Sleep(10 * time.Millisecond)
+	}
+	fmt.Printf("%s finalizou o envio de leituras\n", nome)
+}
+
+// consumidor lê do canal até ele ser fechado e calcular as estatísticas.
+// c é um canal somente de recebimento (unidirecional).
+func consumidor(c <-chan float64, resultado chan<- struct {
+	quantidade int
+	media      float64
+	maior      float64
+	menor      float64
+}) {
+	quantidade := 0
+	var soma, maior, menor float64
+
+	for temperatura := range c {
+		quantidade++
+		soma += temperatura
+
+		if quantidade == 1 {
+			maior = temperatura
+			menor = temperatura
+		} else {
+			if temperatura > maior {
+				maior = temperatura
+			}
+			if temperatura < menor {
+				menor = temperatura
+			}
+		}
+	}
+
+	media := 0.0
+	if quantidade > 0 {
+		media = soma / float64(quantidade)
+	}
+
+	resultado <- struct {
+		quantidade int
+		media      float64
+		maior      float64
+		menor      float64
+	}{quantidade, media, maior, menor}
+}
+
+func main() {
+	canal := make(chan float64)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// dois sensores de temperatura (produtores) compartilhando o canal
+	go sensor("Sensor A", canal, &wg)
+	go sensor("Sensor B", canal, &wg)
+
+	// canal usado só para o consumidor devolver o resultado final calculado
+	resultadoCh := make(chan struct {
+		quantidade int
+		media      float64
+		maior      float64
+		menor      float64
+	})
+	go consumidor(canal, resultadoCh)
+
+	// espera os dois sensores terminarem de enviar e então fecha o canal,
+	// o que faz o "range" do consumidor terminar automaticamente
+	wg.Wait()
+	close(canal)
+
+	// aguarda o consumidor terminar de processar e enviar o resultado
+	r := <-resultadoCh
+
+	fmt.Println("\n--- Relatório do monitoramento ---")
+	fmt.Printf("Quantidade de medições: %d\n", r.quantidade)
+	fmt.Printf("Temperatura média:      %.2f\n", r.media)
+	fmt.Printf("Maior temperatura:      %.2f\n", r.maior)
+	fmt.Printf("Menor temperatura:      %.2f\n", r.menor)
+}
